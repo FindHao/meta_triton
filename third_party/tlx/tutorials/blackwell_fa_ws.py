@@ -140,6 +140,8 @@ def _attn_fwd_ws(sm_scale, M,  #
                     alpha_1 = tlx.local_load(alpha_tiles[cid * HEAD_DIM * NUM_BUFFERS_QK])
                     tlx.barrier_arrive(alpha_empties[buf_idx_2])
 
+                    # Wait for the previous P@V dot before reusing its accumulator.
+                    tlx.barrier_wait(acc_empties[buf_idx_2], phase ^ 1)
                     acc = tlx.local_load(acc_tiles[buf_idx_2])
                     acc = acc * alpha_1
                     tlx.local_store(acc_tiles[buf_idx_2], acc)

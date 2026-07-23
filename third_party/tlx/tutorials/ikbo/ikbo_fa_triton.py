@@ -256,10 +256,10 @@ def _ikbo_fa_kernel(
     qk_scale = 1.44269504089 * (1.0 / tl.sqrt(tl.cast(d_head, tl.float32)))
 
     Q_block_ptr = tl.make_block_ptr(
-        base=Q + pid_head * stride_q_head,
-        shape=(total_q_tokens, d_head),
+        base=Q + seq_start_q * stride_q_token + pid_head * stride_q_head,
+        shape=(n_seed, d_head),
         strides=(stride_q_token, stride_q_dim),
-        offsets=(seq_start_q + pid_m * BLOCK_M, 0),
+        offsets=(pid_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, d_head),
         order=(1, 0),
     )
@@ -280,10 +280,10 @@ def _ikbo_fa_kernel(
         order=(1, 0),
     )
     O_block_ptr = tl.make_block_ptr(
-        base=output + pid_head * stride_o_head,
-        shape=(total_q_tokens, d_head),
+        base=output + seq_start_q * stride_o_token + pid_head * stride_o_head,
+        shape=(n_seed, d_head),
         strides=(stride_o_token, stride_o_dim),
-        offsets=(seq_start_q + pid_m * BLOCK_M, 0),
+        offsets=(pid_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, d_head),
         order=(1, 0),
     )
@@ -324,6 +324,7 @@ def ikbo_fa(
     num_heads,
     d_head,
     max_seq_len,
+    config=None,
 ):
     """IKBO Flash Attention with in-kernel user broadcast.
 
@@ -343,13 +344,7 @@ def ikbo_fa(
     """
     output = torch.empty_like(query)
 
-    grid = lambda META: (
-        cand_grid.shape[0],
-        num_heads,
-        triton.cdiv(n_seed, META["BLOCK_M"]),
-    )
-
-    _ikbo_fa_kernel[grid](
+    kernel_args = (
         query,
         key,
         value,
@@ -368,6 +363,8 @@ def ikbo_fa(
         output.stride(0),
         output.stride(1),
         output.stride(2),
+    )
+    kernel_kwargs = dict(
         n_seed=n_seed,
         num_heads=num_heads,
         d_head=d_head,
@@ -376,5 +373,15 @@ def ikbo_fa(
         total_kv_tokens=key.shape[0],
         ALLOW_TF32=not _is_hip,
     )
+    if config is None:
+        grid = lambda META: (
+            cand_grid.shape[0],
+            num_heads,
+            triton.cdiv(n_seed, META["BLOCK_M"]),
+        )
+        _ikbo_fa_kernel[grid](*kernel_args, **kernel_kwargs)
+    else:
+        grid = (cand_grid.shape[0], num_heads, triton.cdiv(n_seed, config["BLOCK_M"]))
+        _ikbo_fa_kernel.fn[grid](*kernel_args, **kernel_kwargs, **config)
 
     return output.view(-1, n_seed, num_heads, d_head).permute(0, 2, 1, 3)

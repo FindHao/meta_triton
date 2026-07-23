@@ -1556,3 +1556,41 @@ def test_ikbo_fa(B, n_seed, num_heads, d_head, max_seq_len, ratio):
         max_seq_len,
     )
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)
+
+
+def test_ikbo_fa_block_m_larger_than_seed():
+    random.seed(0)
+    torch.manual_seed(0)
+    B, n_seed, num_heads, d_head, max_seq_len, ratio = (66, 64, 2, 128, 1024, 64)
+    query, key, value, cand_to_user_index, cand_grid = _ikbo_fa_create_inputs(
+        B,
+        n_seed,
+        num_heads,
+        d_head,
+        max_seq_len,
+        cand_to_user_ratio=ratio,
+        device=DEVICE,
+    )
+    ref_out = _ikbo_fa_reference(
+        query,
+        key,
+        value,
+        cand_to_user_index,
+        n_seed,
+        num_heads,
+        d_head,
+        max_seq_len,
+    )
+    tri_out = _ikbo_fa(
+        query,
+        key,
+        value,
+        cand_to_user_index,
+        cand_grid,
+        n_seed,
+        num_heads,
+        d_head,
+        max_seq_len,
+        config={"BLOCK_M": 128, "BLOCK_N": 128, "num_stages": 2, "num_warps": 8},
+    )
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=0)

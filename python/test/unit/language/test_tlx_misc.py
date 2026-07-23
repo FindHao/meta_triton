@@ -185,7 +185,7 @@ def test_stoch_round(src_dtype, dst_dtype, device):
 
     SIZE = 256
     a = torch.randn([SIZE], dtype=torch.float32, device=device).to(src_dtype_torch)
-    b = torch.empty([SIZE], dtype=torch.float32, device=device).to(dst_dtype_torch)
+    b = torch.empty([SIZE], dtype=dst_dtype_torch, device=device)
     grid = lambda meta: (1, )
     kernel = stoch_round_kernel[grid](
         a,
@@ -270,7 +270,7 @@ def test_stoch_round_partial_pack(dst_dtype, device):
         quarter_size = (SIZE + 3) // 4
         QUARTER_SIZE_ROUNDED = 1 << (quarter_size - 1).bit_length()
         a = torch.randn([SIZE], dtype=torch.float32, device=device)
-        b = torch.empty([SIZE], dtype=torch.float32, device=device).to(dst_dtype_torch)
+        b = torch.empty([SIZE], dtype=dst_dtype_torch, device=device)
         grid = lambda meta: (1, )
         stoch_round_partial_kernel[grid](
             a,

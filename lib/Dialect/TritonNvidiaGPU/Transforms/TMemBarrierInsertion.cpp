@@ -6,6 +6,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -210,6 +211,37 @@ static SmallVector<AllocationSlice> getTMemSlices(Value value) {
   return slices;
 }
 
+// `ttng.wait_barrier_named` is a Meta-only op that lowers to a hardware
+// `bar.sync <id>, <numThreads>`. When its thread count covers every thread of
+// the enclosing task it is exactly as strong as a `ttg.barrier local` for the
+// purpose of ordering tensor memory accesses, so an already-present one makes
+// inserting another barrier redundant. `mlir::containsLocalBarrier` does not
+// know about this op, and teaching it would perturb every other membar
+// analysis (including shared memory), so the knowledge is kept local here.
+//
+// A partial count only synchronizes a subset of the task's threads and a
+// non-constant count cannot be reasoned about statically; both must stay
+// conservative and are rejected.
+static bool isFullTaskNamedBarrier(Operation *op) {
+  auto wait = dyn_cast<NamedBarrierWaitOp>(op);
+  if (!wait)
+    return false;
+
+  APInt numThreads;
+  if (!matchPattern(wait.getNumThreads(), m_ConstantInt(&numThreads)))
+    return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  std::optional<int> numWarps = ttg::maybeLookupNumWarps(op);
+  if (!mod || !numWarps)
+    return false;
+
+  int64_t taskThreads =
+      static_cast<int64_t>(*numWarps) *
+      static_cast<int64_t>(ttg::TritonGPUDialect::getThreadsPerWarp(mod));
+  return numThreads.getSExtValue() == taskThreads;
+}
+
 static void appendReadSlices(Value value, Operation *op, BlockInfo *blockInfo) {
   if (!isTensorMemory(value))
     return;
@@ -246,7 +278,7 @@ void TMemBarrierAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                  FuncBlockInfoMapT *funcBlockInfoMap,
                                  OpBuilder *builder) {
-  if (mlir::containsLocalBarrier(op)) {
+  if (mlir::containsLocalBarrier(op) || isFullTaskNamedBarrier(op)) {
     blockInfo->sync();
     return;
   }

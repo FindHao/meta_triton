@@ -330,4 +330,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tmem_copy %arg1, %0 : !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     tt.return
   }
+
+  // A named barrier whose thread count covers the whole task
+  // (ttg.num-warps * threads-per-warp = 4 * 32 = 128) already synchronizes
+  // every thread that can touch the tensor memory, so the WAR hazard between
+  // the load and the store needs no extra barrier.
+  // CHECK-LABEL: @ld_then_full_named_barrier_then_st
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.wait_barrier_named
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_full_named_barrier_then_st(%arg0: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %bar = arith.constant 10 : i32
+    %num_threads = arith.constant 128 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %1 = ttng.tmem_load %0 : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.wait_barrier_named %bar, %num_threads : i32, i32
+    ttng.tmem_store %arg0, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // A named barrier that only covers part of the task (64 of 128 threads)
+  // leaves the remaining threads unsynchronized, so stay conservative.
+  // CHECK-LABEL: @ld_then_partial_named_barrier_then_st
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.wait_barrier_named
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_partial_named_barrier_then_st(%arg0: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %bar = arith.constant 10 : i32
+    %num_threads = arith.constant 64 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %1 = ttng.tmem_load %0 : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.wait_barrier_named %bar, %num_threads : i32, i32
+    ttng.tmem_store %arg0, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // A dynamic thread count cannot be proven to cover the task, so stay
+  // conservative.
+  // CHECK-LABEL: @ld_then_dynamic_named_barrier_then_st
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.wait_barrier_named
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_dynamic_named_barrier_then_st(%arg0: tensor<128x128xf32, #blocked>, %num_threads: i32) {
+    %true = arith.constant true
+    %bar = arith.constant 10 : i32
+    %0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %1 = ttng.tmem_load %0 : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.wait_barrier_named %bar, %num_threads : i32, i32
+    ttng.tmem_store %arg0, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
 }
